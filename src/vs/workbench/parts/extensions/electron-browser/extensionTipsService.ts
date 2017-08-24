@@ -27,6 +27,7 @@ import { IConfigurationService } from 'vs/platform/configuration/common/configur
 import { IConfigurationEditingService, ConfigurationTarget } from 'vs/workbench/services/configuration/common/configurationEditing';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import * as cp from 'child_process';
+import { distinct } from 'vs/base/common/arrays';
 
 interface IExtensionsContent {
 	recommendations: string[];
@@ -38,7 +39,8 @@ export class ExtensionTipsService implements IExtensionTipsService {
 
 	_serviceBrand: any;
 
-	private _recommendations: { [id: string]: boolean; } = Object.create(null);
+	private _fileBasedRecommendations: { [id: string]: boolean; } = Object.create(null);
+	private _exeBasedRecommendations: string[] = [];
 	private _availableRecommendations: { [pattern: string]: string[] } = Object.create(null);
 	private importantRecommendations: { [id: string]: { name: string; pattern: string; } } = Object.create(null);
 	private importantRecommendationsIgnoreList: string[];
@@ -84,10 +86,17 @@ export class ExtensionTipsService implements IExtensionTipsService {
 		}, err => []);
 	}
 
-	getRecommendations(): string[] {
+	getRecommendations(): { [type: string]: string[]; } {
 		const allRecomendations = this._getAllRecommendationsInProduct();
-		return Object.keys(this._recommendations)
+		const fileBased = Object.keys(this._fileBasedRecommendations)
 			.filter(recommendation => allRecomendations.indexOf(recommendation) !== -1);
+
+		const exeBased = distinct(this._exeBasedRecommendations);
+
+		return {
+			fileBased,
+			exeBased
+		};
 	}
 
 	getKeymapRecommendations(): string[] {
@@ -96,7 +105,7 @@ export class ExtensionTipsService implements IExtensionTipsService {
 
 	private _getAllRecommendationsInProduct(): string[] {
 		if (!this._allRecommendations) {
-			this._allRecommendations = [...Object.keys(this.importantRecommendations), ...Object.keys(product.exeBasedExtensionTips)];
+			this._allRecommendations = [...Object.keys(this.importantRecommendations)];
 			forEach(this._availableRecommendations, ({ value: ids }) => {
 				this._allRecommendations.push(...ids);
 			});
@@ -115,7 +124,7 @@ export class ExtensionTipsService implements IExtensionTipsService {
 		// retrieve ids of previous recommendations
 		const storedRecommendations = <string[]>JSON.parse(this.storageService.get('extensionsAssistant/recommendations', StorageScope.GLOBAL, '[]'));
 		for (let id of storedRecommendations) {
-			this._recommendations[id] = true;
+			this._fileBasedRecommendations[id] = true;
 		}
 
 		// group ids by pattern, like {**/*.md} -> [ext.foo1, ext.bar2]
@@ -164,14 +173,14 @@ export class ExtensionTipsService implements IExtensionTipsService {
 				let { key: pattern, value: ids } = entry;
 				if (match(pattern, uri.fsPath)) {
 					for (let id of ids) {
-						this._recommendations[id] = true;
+						this._fileBasedRecommendations[id] = true;
 					}
 				}
 			});
 
 			this.storageService.store(
 				'extensionsAssistant/recommendations',
-				JSON.stringify(Object.keys(this._recommendations)),
+				JSON.stringify(Object.keys(this._fileBasedRecommendations)),
 				StorageScope.GLOBAL
 			);
 
@@ -296,7 +305,7 @@ export class ExtensionTipsService implements IExtensionTipsService {
 		forEach(product.exeBasedExtensionTips, entry => {
 			cp.exec(`${cmd} ${entry.value.replace(/,/g, ' ')}`, (err, stdout, stderr) => {
 				if (stdout) {
-					this._recommendations[entry.key] = true;
+					this._exeBasedRecommendations.push(entry.key);
 				}
 			});
 		});
